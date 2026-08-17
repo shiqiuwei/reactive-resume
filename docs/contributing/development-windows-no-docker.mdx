@@ -1,0 +1,224 @@
+---
+title: "Windows 本机开发（不使用 Docker）"
+description: "在 Windows 上使用本机 PostgreSQL、Node.js 和 pnpm 运行 Reactive Resume。"
+---
+
+这份指南适用于不使用 Docker、直接在 Windows 主机上运行 Reactive Resume 的情况。
+应用本身由 Web 前端和 Node.js 服务端组成，但服务端必须连接 PostgreSQL。
+
+<Info>
+  本文使用 Node.js 24、pnpm 11.21.0 和 PostgreSQL 17 或更高版本。Redis 和 S3/SeaweedFS
+  不是核心简历功能的必需依赖；不配置它们时，上传文件会保存到本地 `data` 目录。
+</Info>
+
+## 1. 安装前置软件
+
+安装以下软件，并确认它们可以在 PowerShell 中使用：
+
+```powershell
+node --version
+pnpm --version
+git --version
+```
+
+推荐版本：
+
+- Node.js 24
+- pnpm 11.21.0
+- Git
+- PostgreSQL 17 或更高版本
+
+PostgreSQL 可以从[官方 Windows 下载页](https://www.postgresql.org/download/windows/)安装。
+安装过程中请记住 `postgres` 用户的密码，并保留默认端口 `5432`。安装程序通常会把
+PostgreSQL 注册为 Windows 服务并自动启动。
+
+验证 PostgreSQL：
+
+```powershell
+Get-Service *postgres*
+Test-NetConnection localhost -Port 5432
+```
+
+第二条命令应返回 `True`。如果服务已安装但未运行：
+
+```powershell
+Start-Service postgresql-x64-17
+```
+
+服务名称可能因 PostgreSQL 版本或安装选项不同而变化，以 `Get-Service *postgres*`
+显示的名称为准。
+
+## 2. 安装项目依赖
+
+在仓库根目录执行：
+
+```powershell
+pnpm install
+```
+
+## 3. 创建本机环境配置
+
+`.env.example` 是模板，不应直接把 Docker 服务名用于本机运行。复制为 `.env`：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+然后编辑仓库根目录的 `.env`，至少设置以下内容：
+
+```env
+PORT="3000"
+SERVER_PORT="3001"
+APP_URL="http://localhost:3000"
+DATABASE_URL="postgresql://postgres:你的数据库密码@localhost:5432/postgres"
+AUTH_SECRET="一段仅用于本地开发的随机字符串"
+LOCAL_STORAGE_PATH="E:/absolute/path/to/reactive-resume/data"
+```
+
+`LOCAL_STORAGE_PATH` 必须是绝对路径。Windows 路径可以使用正斜杠，例如：
+
+```env
+LOCAL_STORAGE_PATH="E:/github-opensource/reactive-resume.worktrees/docker-deployment-requirement/data"
+```
+
+如果数据库密码包含 `@`、`#`、`!`、`:` 或其他 URL 保留字符，需要先进行 URL 编码。
+例如 `#` 应写成 `%23`。
+
+### 不使用的可选服务
+
+本机不使用 SeaweedFS 时，删除或注释 `.env` 中以下变量，让应用使用本地文件存储：
+
+```env
+# S3_ACCESS_KEY_ID=
+# S3_SECRET_ACCESS_KEY=
+# S3_ENDPOINT=
+# S3_BUCKET=
+```
+
+Redis 只在使用已保存的 AI Provider 或 `/agent` 工作区时需要。普通简历编辑不需要
+配置 `REDIS_URL` 和 `ENCRYPTION_SECRET`。
+
+### `.env` 和 `.env.local` 的区别
+
+- 服务端启动代码会自动读取仓库根目录的 `.env`。
+- `compose.dev.yml` 使用 `.env.local`，它适用于 Docker 开发容器。
+- 因此直接执行 `pnpm dev` 时，建议把本机配置放在 `.env`。
+
+## 4. 启动项目
+
+直接启动 Web 和服务端：
+
+```powershell
+pnpm dev
+```
+
+服务端启动时会自动执行数据库迁移。首次启动可能需要等待一段时间，直到看到类似
+以下输出：
+
+```text
+Database migrations completed
+Up and running on http://localhost:3001
+```
+
+Web 前端启动后会显示：
+
+```text
+Local: http://localhost:3000/
+```
+
+访问：
+
+<Card title="打开 Reactive Resume" icon="browser" href="http://localhost:3000">
+  http://localhost:3000
+</Card>
+
+## 5. 验证服务是否正常
+
+先检查服务端健康接口：
+
+```powershell
+Invoke-WebRequest http://localhost:3001/api/health -UseBasicParsing
+```
+
+正常结果应为 HTTP `200`，并且响应中的 `database.status` 和 `storage.status` 都是
+`healthy`。然后检查 Web：
+
+```powershell
+Invoke-WebRequest http://localhost:3000/ -UseBasicParsing
+```
+
+正常结果应为 HTTP `200`。
+
+## 6. 常见问题
+
+### 页面一直加载，或者出现 `502 Bad Gateway`
+
+这表示 Web 前端已经启动，但它代理到 `SERVER_PORT` 的服务端没有正常运行。
+按下面顺序检查：
+
+```powershell
+Test-NetConnection localhost -Port 5432
+Invoke-WebRequest http://localhost:3001/api/health -UseBasicParsing
+```
+
+如果 `3001` 没有响应，直接查看运行 `pnpm dev` 的终端窗口。最常见的原因是：
+
+- PostgreSQL 没有启动；
+- `DATABASE_URL` 仍然使用了 Docker 主机名 `postgres`；
+- `AUTH_SECRET` 或其他必需环境变量缺失；
+- 端口 `3001` 已被其他进程占用。
+
+### `ECONNREFUSED 127.0.0.1:5432`
+
+启动 PostgreSQL 服务：
+
+```powershell
+Get-Service *postgres*
+Start-Service <实际显示的服务名>
+```
+
+确认 `.env` 使用的是 `localhost`，而不是 Docker Compose 中使用的 `postgres`：
+
+```env
+DATABASE_URL="postgresql://postgres:密码@localhost:5432/postgres"
+```
+
+### `serveStatic: ... apps/web/dist is not found`
+
+这是开发模式下服务端找不到生产构建目录的提示，不会阻止 Vite 开发服务器提供
+页面。只要 Web 在 `3000` 监听、服务端健康检查返回 `200`，就可以忽略。
+
+### `EADDRINUSE`
+
+检查端口占用：
+
+```powershell
+Get-NetTCPConnection -State Listen |
+  Where-Object LocalPort -in 3000,3001,5432 |
+  Select-Object LocalPort,OwningProcess
+```
+
+停止确认属于本项目的旧 Node.js 进程后再重新执行 `pnpm dev`。不要随意停止其他项目
+的进程。
+
+## 7. 停止和重启
+
+在运行 `pnpm dev` 的终端按 `Ctrl+C` 停止 Web 和服务端。PostgreSQL 是独立的
+Windows 服务，需要时可以单独控制：
+
+```powershell
+Stop-Service <实际显示的 PostgreSQL 服务名>
+Start-Service <实际显示的 PostgreSQL 服务名>
+```
+
+## 本次无 Docker 启动的关键点
+
+本次启动能够成功的关键不是修改业务代码，而是完成了以下基础设施配置：
+
+1. 安装项目 pnpm 依赖；
+2. 在本机 `5432` 启动 PostgreSQL；
+3. 将 Docker 用的 `postgres` 主机名改为本机用的 `localhost`；
+4. 配置 `AUTH_SECRET` 和绝对的本地存储目录；
+5. 让服务端先完成数据库迁移，再让 Web 前端代理到 `3001`；
+6. 用 `/api/health` 同时确认数据库、服务端和本地文件存储均正常。
+

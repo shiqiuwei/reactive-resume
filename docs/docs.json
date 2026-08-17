@@ -143,7 +143,12 @@
 					},
 					{
 						"group": "Contributing",
-						"pages": ["contributing/architecture", "contributing/development", "contributing/translations"]
+						"pages": [
+							"contributing/architecture",
+							"contributing/development",
+							"contributing/development-windows-no-docker",
+							"contributing/translations"
+						]
 					},
 					{
 						"group": "Community",
